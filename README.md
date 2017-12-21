@@ -1,6 +1,8 @@
 # tcpscan
 tcpscan
 
+gcc ./tcpscan.c ./tcplib.c -o tcpscan  -lpthread
+
 ```sh
 [toor@localhost src]$ ./tcpscan
 TCP Port Scanner V1.0 By x373241884y
