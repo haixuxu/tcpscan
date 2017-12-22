@@ -103,7 +103,6 @@ typedef struct _iphdr
 
 } IP_HEADER;
 
-
 typedef struct  IPRange{ //声明一种类型,IPRange是类型的标签，或者说是类型的元数据
     uint32_t start_addr;
     uint32_t end_addr;
@@ -115,6 +114,7 @@ typedef struct {
 }PortRange;
 
 //通用函数
+int getrandom(int begin, int end);
 void help(char * app);
 void socket_timeoutset(int sockfd);
 void uint32_to_ipstr(uint32_t ip,char *ip_ptr);
@@ -125,5 +125,29 @@ uint32_t hostname_to_ip(char *hostname);
 //辅助函数
 void parse_ip_str(char * startIpAddr,char * endIpAddr,IpRange *ip_range);
 void parse_port_str(char * poststr,PortRange *port_range);
+
+
+//threadpool
+typedef struct threadpool_task_t{ //工作任务
+    void (*function)(void *);
+
+    void *argument;
+} ThreadTask;
+typedef struct threadpool_t { //线程池类型
+    pthread_mutex_t lock;
+    pthread_cond_t notify;
+    pthread_t *threads;
+    ThreadTask *queue;
+    int thread_count;
+    int queue_size;
+    int head;
+    int tail;
+    int count;
+    int shutdown;
+    int started;
+} ThreadPool;
+ThreadPool *threadpool_create(int thread_count, int queue_size, int flags);
+int threadpool_add(ThreadPool *pool, void (*routine)(void *), void *arg, int flags);
+int threadpool_destroy(ThreadPool *pool, int flags);
 
 #endif //TCPSCAN_TCPLIB_H
