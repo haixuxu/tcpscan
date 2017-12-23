@@ -17,36 +17,57 @@ int getrandom(int begin, int end) {
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start);    /* mark start time */
     return (begin + start.tv_nsec % (end - begin + 1));
 }
-
+int valid_ip_addr(char *ipAddress) {
+    struct sockaddr_in sa;
+    int result = inet_pton(AF_INET, ipAddress, &(sa.sin_addr));
+    return result != 0;
+}
 void help(char *app) {
-    printf("Usage:   %s TCP/SYN StartIP [EndIP] Ports [Threads] [/T(N)] [/(H)Banner] [/Save]\n", app);
-    printf("Example: %s TCP 12.12.12.12 12.12.12.254 80 512\n", app);
-    printf("Example: %s TCP 12.12.12.12/24 80 512\n", app);
-    printf("Example: %s TCP 12.12.12.12/24 80 512 /T8 /Save\n", app);
-    printf("Example: %s TCP 12.12.12.12 12.12.12.254 80 512 /HBanner\n", app);
-    printf("Example: %s TCP 12.12.12.12 12.12.12.254 21 512 /Banner\n", app);
+    printf("Usage:   %s TCP/SYN StartIP [EndIP] Ports [/T(N)] [/t(sec)] [/(H)Banner] [/Save]\n", app);
+    printf("Example: %s TCP 12.12.12.12 12.12.12.254 80 /T512\n", app);
+    printf("Example: %s TCP 12.12.12.12/24 80 /T512\n", app);
+    printf("Example: %s TCP 12.12.12.12/24 80 /T512 /t5 /Save\n", app);
+    printf("Example: %s TCP 12.12.12.12 12.12.12.254 80 /T512 /HBanner\n", app);
+    printf("Example: %s TCP 12.12.12.12 12.12.12.254 21 /T512 /Banner\n", app);
 
-    printf("Example: %s TCP 12.12.12.12 1-65535 512\n", app);
-    printf("Example: %s TCP 12.12.12.12 12.12.12.254 21,3389,5631 512\n", app);
-    printf("Example: %s TCP 12.12.12.12 21,3389,5631 512\n", app);
+    printf("Example: %s TCP 12.12.12.12 1-65535 /T512\n", app);
+    printf("Example: %s TCP 12.12.12.12 12.12.12.254 21,3389,5631 /T512\n", app);
+    printf("Example: %s TCP 12.12.12.12 21,3389,5631 /T512\n", app);
     printf("Example: %s SYN 12.12.12.12 12.12.12.254 80\n", app);
     printf("Example: %s SYN 12.12.12.12 1-65535\n", app);
     printf("Example: %s SYN 12.12.12.12 12.12.12.254 21,80,3389\n", app);
     printf("Example: %s SYN 12.12.12.12 21,80,3389\n", app);
 }
 
-void socket_timeoutset(int sockfd) {
-    struct timeval timeout_s, timeout_r;
-    timeout_s.tv_sec = 1;
-    timeout_s.tv_usec = 0;
-    timeout_r.tv_sec = 1;
-    timeout_r.tv_usec = 0;
+void print_buffer(unsigned char *buffer, int len) {
+    int i = 0;
+    int offset = 0;
+    int row = 0;
 
-    if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *) &timeout_r, sizeof(timeout_r)) < 0) {
-        perror("setsockopt failed\n");
-        exit(-1);
+    while (i < len) {
+        if (i == 0) {
+            printf("0x00000000:");
+        }
+        printf("%02X", *(buffer + i));
+        if (i % 2 == 1) {
+            printf(" ");
+        }
+        offset = i % 0x10;
+        row = (int) (i / 0x10 + 1);
+        if (offset == 15) {
+            printf("\n0x%08X:", row * 16);
+        }
+        i++;
     }
-    if (setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (char *) &timeout_s, sizeof(timeout_s)) < 0) {
+    printf("\n");
+    fflush(stdout);
+}
+
+void socket_timeoutset(int sockfd,int seconds,int socktype) {
+    struct timeval tv;
+    tv.tv_sec = seconds;
+    tv.tv_usec = 0;
+    if (setsockopt(sockfd, SOL_SOCKET, socktype==1?SO_SNDTIMEO:SO_RCVTIMEO, (char *) &tv, sizeof(tv)) < 0) {
         perror("setsockopt failed\n");
         exit(-1);
     }
@@ -151,17 +172,19 @@ void parse_ip_str(char *startIpAddr, char *endIpAddr, IpRange *ipinfo) {
     char *slash = NULL;
     unsigned int range = 0;
     unsigned int submask = 0;
-
     memset(startIpStr, 0, sizeof(startIpStr));
 
-    if (!endIpAddr) {
+    if (endIpAddr!=NULL) {
+        ipinfo->start_addr = inet_addr(startIpAddr);
+        ipinfo->end_addr = inet_addr(endIpAddr);
+    }else{
         slash = strchr(startIpAddr, '/'); //get "/24"
         if (slash) {
             strncpy(startIpStr, startIpAddr, strlen(startIpAddr) - strlen(slash)); //192.168.0.0/24 ==> 192.168.0.0
             int bit = atoi(slash + 1); //24
             range = 0xFFFFFFFF >> bit;
             submask = 0xFFFFFFFF << (32 - bit);
-//
+
             ipinfo->start_addr = (inet_addr(startIpStr) & ntohl(submask)) + ntohl(1);    //保存4字节IP主机字节序
             ipinfo->end_addr = (inet_addr(startIpStr) & ntohl(submask)) + ntohl(range - 1);//保存4字节IP主机字节序
         } else {

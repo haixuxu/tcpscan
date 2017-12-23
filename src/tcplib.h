@@ -115,9 +115,11 @@ typedef struct {
 
 //通用函数
 int getrandom(int begin, int end);
+int valid_ip_addr(char *ipAddress);
 void help(char * app);
-void socket_timeoutset(int sockfd);
+void print_buffer(unsigned char *buffer, int len);
 void uint32_to_ipstr(uint32_t ip,char *ip_ptr);
+void socket_timeoutset(int sockfd,int seconds,int socktype);
 //通用函数
 uint16_t checkSum(void * buffer, int size);
 uint32_t get_local_ip (char * dstIpAddr);
@@ -130,9 +132,9 @@ void parse_port_str(char * poststr,PortRange *port_range);
 //threadpool
 typedef struct threadpool_task_t{ //工作任务
     void (*function)(void *);
-
     void *argument;
 } ThreadTask;
+
 typedef struct threadpool_t { //线程池类型
     pthread_mutex_t lock;
     pthread_cond_t notify;

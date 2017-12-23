@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
@@ -17,92 +16,56 @@
 
 #define _isDebug  false
 
-//调试日志
-#define  debugger(fmt, arg...)  do{logcat(1,fmt,##arg);fflush(stdout);}while(0)
-//打印并根据条件写入文件
-#define  spwritelog(fmt, arg...)  do{logcat(2,fmt,##arg);fflush(stdout);}while(0)
-
 typedef struct LpParamsTag {
     uint32_t addr_h;
     uint16_t port_h;
 } LpParams;
 
+//option
 bool isSynScan = false;
 bool _isLog = false;
 bool _isBanner = false;
-
-
-uint32_t *_portsArray;
+bool _isHttp = false;
+uint16_t *_portsArray;
 int _portCount;
-int log_fd;  // for log
-int _syn_pack_wait = 0;
-char sniffer_buf[256];
-//char write_buf[1024]; //write file cache
-
-//保存网络字节序IP
-uint32_t _bindIpAddr;
-uint32_t _startIp;
-uint32_t _endIp;
+uint32_t _startIp; //内存值为big order
+uint32_t _endIp;   //内存值为big order
 
 IpRange *iprange;
 PortRange *portrange;
 
-unsigned long _tcpTimeout = 3;
-unsigned long _maxThreads;
+int log_fd;  // for log
+unsigned long _scantasks = 0;
+unsigned long _donetasks = 0;
 
+//SYN option
+//保存网络字节序IP
+uint32_t _bindIpAddr;
+char sniffer_buf[256];
+//char write_buf[1024]; //write file cache
+
+//TCP option
+unsigned int _tcpTimeout = 3;
+unsigned int _maxThreads=1;
 ThreadPool *thpool;
 pthread_mutex_t lock;
-unsigned long _scantasks = 0, _donetasks = 0;
-
 
 const char *_logFile = "Result.txt"; // idb
 char _httpRequest[] = "HEAD / HTTP/1.0\r\n\r\n";
 
-
-typedef void *HANDLE;
-bool _isHttp = false;
-
-void print_buffer(unsigned char *buffer, int len, bool issend) {
-    if (_isDebug) {
-        printf("--------------------recv %s hex---------------------\n", issend ? "send" : "recv");
-        int i = 0;
-        int offset = 0;
-        int row = 0;
-
-        while (i < len) {
-            if (i == 0) {
-                printf("0x00000000:");
-            }
-            printf("%02X", *(buffer + i));
-            if (i % 2 == 1) {
-                printf(" ");
-            }
-            offset = i % 0x10;
-            row = (int) (i / 0x10 + 1);
-            if (offset == 15) {
-                printf("\n0x%08X:", row * 16);
-            }
-            i++;
-        }
-        printf("--------------------------------------------------------\n");
-    }
-}
-
-void logcat(int type, const char *format, ...) {
+void spwritelog(const char *format, ...) {
+    char buffer[1024];
     va_list args;
     va_start(args, format);
-    if (type == 1) { //debug
-        if (_isDebug) {
-            vprintf(format, args);
-        }
-    } else if (type == 2) { //console log and write file....
-        vprintf(format, args);
-        if (_isLog) {
-            vdprintf(log_fd, format, args);
+    int rc = vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    printf(buffer);
+    if (_isLog) {
+        int ret = write(log_fd, buffer, rc);
+        if(ret < 0 ) {
+            printf("write result file failed !!\n");
         }
     }
-    va_end(args);
-
 }
 
 void freemem() {
@@ -112,28 +75,22 @@ void freemem() {
     if (!isSynScan) {
         threadpool_destroy(thpool, 0);
     }
+    if(_isLog){
+        close(log_fd);
+    }
 }
-
-unsigned GetTickCount() {
-    struct timeval tv;
-    if (gettimeofday(&tv, NULL) != 0)
-        return 0;
-
-    return (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
-}
-
 
 void printScanOption() {
     char bipstr[100] = {0};
     char start_ipstr[100] = {0};
     char end_ipstr[100] = {0};
 
+    printf("_bindIp  mem>>%X\n", _bindIpAddr);
+    printf("_startIp mem>>%X\n", _startIp);
+    printf("_endIp   mem>>%X\n", _endIp);
+
     uint32_to_ipstr(_startIp, start_ipstr);
     uint32_to_ipstr(_endIp, end_ipstr);
-
-    printf("%X\n", _bindIpAddr); //网络字节序列
-    printf("%X\n", _startIp);    //网络字节序列
-    printf("%X\n", _endIp);      //网络字节序列
 
     printf("----------------------scan options----------------------\n");
     printf("           ScanType :%s\n", isSynScan ? "SYN" : "TCP");
@@ -169,9 +126,9 @@ int buildSynPacket(char *buf, u_long saddr, u_long sport, u_long daddr, u_long d
     TCP_HEADER tcp_header;
     PSD_HEADER psd_header;
     //填充IP首部
+    //高四位IP版本号，低四位首部长度
     ip_header.h_lenver = (4 << 4 | 5);
     ip_header.tos = 0;
-    //高四位IP版本号，低四位首部长度
     ip_header.total_len = htons(sizeof(IP_HEADER) + sizeof(TCP_HEADER)); //16位总长度（字节）
     ip_header.ident = 1; //16位标识
     ip_header.frag_and_flags = 0; //3位标志位
@@ -217,8 +174,8 @@ int buildSynPacket(char *buf, u_long saddr, u_long sport, u_long daddr, u_long d
     ip_header.checksum = checkSum(buf, len);
     //填充发送缓冲区
     memcpy(buf, &ip_header, sizeof(ip_header));
-    print_buffer(buf, len, true);
-//    printf("tos:%X\n", ip_header.tos);
+//    printf("---------------------------send hex---------------------\n");
+//    print_buffer(buf, len);
     return len;
 }
 
@@ -231,11 +188,12 @@ void process_packet(unsigned char *buffer, int size) {
         printf("receive packet size so small...\n");
         return;
     }
-    print_buffer(buffer, size, false);
+//    printf("---------------------------recv hex---------------------\n");
+//    print_buffer(buffer, size);
 
     //Get the IP Header part of this packet
     IP_HEADER *iph = (IP_HEADER *) buffer;
-
+    TCP_HEADER *tcph = (TCP_HEADER *) (buffer + sizeof(TCP_HEADER));
 //    printf("%02X ", iph->tos); //1字节
 //    printf("%04X ", iph->total_len); //2字节 读取颠倒....
     char remote_ipstr[100] = {0};
@@ -244,16 +202,21 @@ void process_packet(unsigned char *buffer, int size) {
     if (packet_faddr < _startIp || packet_faddr > _endIp) { //不是要扫描的IP
         return;
     }
+    //完成任务计数
+    pthread_mutex_lock(&lock);
+    _donetasks++;
+    pthread_mutex_unlock(&lock);
+
     uint32_to_ipstr(packet_faddr, remote_ipstr);
-//    printf("process_packet---%s---th_sport:%d,th-flag:%d\n", remote_ipstr, ntohs(tcph->th_sport), tcph->th_flag);
+//    printf("process_packet---%s---th_sport:%d\n", remote_ipstr, *(buffer + 21));
     //-------|CWR|ECE|URG|ACK|PSH|RST|SYN|FIN|
     //-------| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 //    uint syn = tcph->th_flag & 0x02;
 //    uint ack = tcph->th_flag & 0x10; 6012
     if (*(buffer + 33) == 0x12) { //00010010 收到确认ACK+SYN包,表明可用,收到ACK+RST包表明不可用
-        spwritelog("%-16s %-5d  Open             \n", remote_ipstr, *(buffer + 21));
+//        print_buffer(buffer, size);
+        spwritelog("%-16s %-5d  Open             \n", remote_ipstr, htons(tcph->th_sport));
     }
-    _syn_pack_wait--;
 }
 
 void *snifferThread(void *ptr) {
@@ -266,24 +229,25 @@ void *snifferThread(void *ptr) {
         printf("You requested a scan type which requires root privileges.\n");
         exit(-1);
     }
+    socket_timeoutset(sock_raw, 3, false); // 3 sec timeout ,close thread
     while (1) {
         //Receive a packet
         data_size = recvfrom(sock_raw, sniffer_buf, sizeof(sniffer_buf), 0, NULL, NULL); //man 3 recvfrom help me
         if (data_size < 0) {
-            printf("%s", "Recvfrom error , failed to get packets\n");
+//            printf("%s", "Recvfrom error , failed to get packets\n");
             break;
         }
         //Now process the packet
         process_packet(sniffer_buf, data_size);
     }
     close(sock_raw);
-//    spwritelog("Sniffer finished.");
 }
 
 void synScan() {
     int portIndex;
-    int currentIp = _startIp;
+    uint32_t currentIp = _startIp;
     char buf[0x100] = {0};//256 byte
+    pthread_t sniffer_thread;
 
 //    memset(buf, 0, sizeof(buf));
     int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
@@ -292,8 +256,17 @@ void synScan() {
         exit(-1);
     }
     printScanOption(); //print option info
-    socket_timeoutset(sockfd);
-    while (currentIp <= (int) _endIp) { //网络字节序列比较
+
+    if (pthread_create(&sniffer_thread, NULL, snifferThread, NULL) < 0) {
+        printf("Could not create sniffer thread. Error number : %d . Error message : %s \n", errno,
+               strerror(errno));
+        freemem();
+        exit(-1);
+    }
+
+    socket_timeoutset(sockfd, 3, true);
+    socket_timeoutset(sockfd, 3, false);
+    while (currentIp <= _endIp) { //网络字节序列比较
         portIndex = 0;
         while (portIndex < _portCount) {
 
@@ -306,9 +279,8 @@ void synScan() {
             addr.sin_addr.s_addr = ntohl(currentIp);
             addr.sin_port = htons(port);
             srandom(seed++);
-            len = buildSynPacket(buf, ntohl(_bindIpAddr), htons(getrandom(0xC000, 0xFFFF)), ntohl(currentIp),
-                                 addr.sin_port);
-            debugger("sendto %s:%d --------\n", inet_ntoa(addr.sin_addr), port);
+            len = buildSynPacket(buf, ntohl(_bindIpAddr), htons(getrandom(0xC000, 0xFFFF)), ntohl(currentIp), addr.sin_port);
+//            printf("sendto %s:%d --------\n", inet_ntoa(addr.sin_addr), port);
             if (sendto(sockfd, buf, len, 0, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
                 printf("Error sending syn packet. Error number : %d . Error message : %s \n", errno, strerror(errno));
                 _donetasks++;
@@ -318,25 +290,30 @@ void synScan() {
         }
         ++currentIp;
     }
+    pthread_join(sniffer_thread, NULL);
 }
 
 
 void tcpScanTask(void *arg) {
     int sockfd;         //socket descriptor
-    pthread_detach(pthread_self());
     LpParams *lp_params = (LpParams *) arg;
+    uint32_t scanIp = lp_params->addr_h;
+    uint16_t scanPort = lp_params->port_h;
+    free(lp_params);
+
+    pthread_detach(pthread_self());
     fd_set readset;
     struct timeval tv;
 
     struct sockaddr_in servaddr;   //socket structure
     struct in_addr destIp;
 
+    destIp.s_addr = scanIp;
     servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(lp_params->port_h); //set the portno
-    destIp.s_addr = lp_params->addr_h;
+    servaddr.sin_port = htons(scanPort); //set the portno
     servaddr.sin_addr = destIp;
-
-    tv.tv_sec = 3;
+//    printf("exec --child---thread--%s:%d\n", inet_ntoa(destIp), scanPort);
+    tv.tv_sec = _tcpTimeout;
     tv.tv_usec = 0;
 
     sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); //created the tcp socket
@@ -344,29 +321,21 @@ void tcpScanTask(void *arg) {
         perror("Socket() error \n");
         goto __destory;
     }
-//    socket_timeoutset(sockfd);
-//    debugger("exec --child---thread--%s:%d\n", inet_ntoa(destIp), lp_params->port_h);
-    //阻塞式socket
-//    int revl = connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
-//    if (revl == 0) {
-//        printf("%-16s %-5d  Open             \n", inet_ntoa(destIp), lp_params->port_h);
-//    }
     fcntl(sockfd, F_SETFL, O_NONBLOCK);
     int ret = connect(sockfd, (struct sockaddr *) &servaddr, sizeof(servaddr));
     int error=0;
     if (ret != -1) {
-        printf("herer..r.esflalf\n");
         goto __recv;
     }
     if (errno == EINPROGRESS) {
-        debugger("(-)- EINPROGRESS in connect() - selecting\n");
+//        printf("(-)- EINPROGRESS in connect() - selecting\n");
         while (1) {
             FD_ZERO(&readset);
             FD_SET(sockfd, &readset);
             ret = select(sockfd + 1, NULL, &readset, NULL, &tv);
             /* error which is not an interruption */
             if (ret < 0 && errno != EINTR) {
-                debugger("(!) %s - Error from select()\n", inet_ntoa(destIp), errno, strerror(errno));
+//                printf("(!) %s - Error from select()\n", inet_ntoa(destIp), errno, strerror(errno));
                 goto __destory;
             } else if (ret > 0) {/* socket selected : host up */
                 __recv:
@@ -375,13 +344,13 @@ void tcpScanTask(void *arg) {
                 int retval = getsockopt (sockfd, SOL_SOCKET, SO_ERROR, &error, &len);
                 if (retval != 0||error != 0) {
                     /* there was a problem getting the error code */
-                    debugger("socket error: %s\n", strerror(error));
+//                    printf("socket error: %s\n", strerror(error));
                     goto __destory;
                 }
-                printf("%-16s %-5d  Open             \n", inet_ntoa(destIp), lp_params->port_h);
+                spwritelog("%-16s %-5d  Open             \n", inet_ntoa(destIp), (int)scanPort);
                 break;
             } else {/* timeout case */
-                debugger("(!) %s:%d is down (timeout)\n", inet_ntoa(destIp), lp_params->port_h);
+//                printf("(!) %s:%d is down (timeout)\n", inet_ntoa(destIp), scanPort);
                 break;
             }
         }
@@ -390,7 +359,6 @@ void tcpScanTask(void *arg) {
     __destory:
     close(sockfd);
     sockfd = -1;
-//    free(lp_params);
     //完成任务计数
     pthread_mutex_lock(&lock);
     _donetasks++;
@@ -400,8 +368,7 @@ void tcpScanTask(void *arg) {
 
 void tcpScan() {
     int portIndex = 0;
-    int currentIp = _startIp;
-    pthread_t pth;
+    uint32_t currentIp = _startIp;
     LpParams *lpParameter;
 
     //初始化
@@ -413,8 +380,8 @@ void tcpScan() {
         freemem();
         exit(-1);
     }
-    fprintf(stderr, "Pool started with %d threads and queue size of %d\n", _maxThreads, thpool->count);
-    while (currentIp <= (int) _endIp) { //网络字节序列比较
+    printf("Pool started with %d threads and queue size of %d\n", _maxThreads, thpool->count);
+    while (currentIp <= _endIp) { //网络字节序列比较
         portIndex = 0;
         while (portIndex < _portCount) {
 
@@ -432,22 +399,17 @@ void tcpScan() {
         }
         ++currentIp;
     }
+    printf("total scan tasks:%d\n", _scantasks);
     while (1) {
+        usleep(15 * 1000);
         if (_scantasks == _donetasks) {
             threadpool_destroy(thpool, 0);
-            printf("scan finished.\n");
-            freemem();
-            exit(0);
+            break;
         }
-        usleep(15 * 1000);
     }
 }
 
-void startScan(char *scanType, char *startIpAddr, char *endIpAddr, char *portString, char *maxThreads) {
-
-
-    pthread_t sniffer_thread;
-
+void startScan(char *scanType, char *startIpAddr, char *endIpAddr, char *portString) {
 
     iprange = malloc(sizeof(IpRange *));
     portrange = malloc(sizeof(PortRange *));
@@ -458,6 +420,10 @@ void startScan(char *scanType, char *startIpAddr, char *endIpAddr, char *portStr
     }
     isSynScan = !strcasecmp(scanType, "SYN");
 
+    if (endIpAddr!=NULL&&!valid_ip_addr(endIpAddr)) {
+        printf("Invalid end ip address.\n");
+        exit(0);
+    }
 
     parse_ip_str(startIpAddr, endIpAddr, iprange); //解析IP列表
     parse_port_str(portString, portrange); //解析端口列表
@@ -471,35 +437,30 @@ void startScan(char *scanType, char *startIpAddr, char *endIpAddr, char *portStr
         _maxThreads = 1; //单线程
         _bindIpAddr = get_local_ip("1.2.4.8"); //获取本地绑定IP
         _bindIpAddr = htonl(_bindIpAddr);
-        if (pthread_create(&sniffer_thread, NULL, snifferThread, NULL) < 0) {
-            printf("Could not create sniffer thread. Error number : %d . Error message : %s \n", errno,
-                   strerror(errno));
-            freemem();
-            exit(-1);
-        }
         synScan();
-        pthread_join(sniffer_thread, NULL);
     } else { //tcp  使用多线程
-        _maxThreads = atoi(maxThreads);
-        if (!_maxThreads || (unsigned int) _maxThreads > 0x400) {
+        if (!_maxThreads || _maxThreads > 0x400) {
             printf("Max Thread Out Of Bound\n");
             exit(0);
         }
         printScanOption();
         tcpScan();
     }
+    spwritelog("scan finished.\n");
+    freemem();
+    exit(0);
 }
 
 int main(int argc, char **argv) {
     int ret;
-    printf("TCP Port Scanner V1.0 By x373241884y\n\n");
+    printf("TCP/SYN Port Scanner V1.0 By x373241884y\n\n");
 
     if (argc == 4 || argc == 5 || argc == 6 || argc == 7 || argc == 8 || argc == 9) {
         int arg = argc;
         for (int i = 1; i <= 3; i++) {
             if (!strcasecmp(argv[argc - i], "/Save")) {
                 _isLog = true;
-                log_fd = open(_logFile, O_RDWR | O_APPEND | O_CREAT, S_IRUSR | S_IWUSR);
+                log_fd = open(_logFile, O_RDWR | O_TRUNC | O_CREAT, S_IRUSR | S_IWUSR);
                 if (log_fd == -1) {
                     printf("Can not create log file .\n");
                     exit(-1);
@@ -509,7 +470,13 @@ int main(int argc, char **argv) {
             } else if (!strcasecmp(argv[argc - i], "/HBanner")) {
                 _isBanner = true;
                 _isHttp = true;
-            } else if (!strncasecmp(argv[argc - i], "/T", 2)) {
+            } else if (!strncasecmp(argv[argc - i], "/T", 2)) { //set threads
+                _maxThreads = atoi(argv[argc - i] + 2);
+                if (!_maxThreads) {
+                    printf("Invalid threads value\n");
+                    exit(-1);
+                }
+            } else if (!strncasecmp(argv[argc - i], "/t", 2)) { //set tcp timeout
                 _tcpTimeout = atoi(argv[argc - i] + 2);
                 if (!_tcpTimeout) {
                     printf("Invalid timeout value\n");
@@ -521,21 +488,12 @@ int main(int argc, char **argv) {
 
             arg--;
         }
-
-        switch (arg) {
-            case 4:
-                startScan(argv[1], argv[2], 0, argv[3], "1");
-                break;
-            case 5:
-                if (!strcasecmp(argv[1], "SYN"))
-                    startScan(argv[1], argv[2], argv[3], argv[4], "1");
-                else
-                    startScan(argv[1], argv[2], 0, argv[3], argv[4]);
-
-                break;
-            case 6:
-                startScan(argv[1], argv[2], argv[3], argv[4], argv[5]);
-                break;
+        if(arg==4){
+            startScan(argv[1], argv[2], NULL, argv[3]); //endIP可选
+        }else if(arg==5){
+            startScan(argv[1], argv[2], argv[3], argv[4]);
+        }else{
+            printf("Invalid arguments list\n");
         }
         ret = 0;
     } else {

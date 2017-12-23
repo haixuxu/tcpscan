@@ -7,12 +7,9 @@
 #define TCPSCAN_TCPSCAN_H
 
 #ifndef DWORD
-typedef unsigned long DWORD;
-typedef short WCHAR;
-typedef void * HANDLE;
-typedef unsigned char BYTE;
-typedef unsigned short WORD;
 typedef unsigned int BOOL;
+typedef unsigned short WORD;
+typedef unsigned long DWORD;
 #endif //TCPSCAN_TCPSCAN_H
 
 #endif
