@@ -102,7 +102,9 @@ void printScanOption() {
     printf("           EndIp    :%s\n", end_ipstr);
     printf("           StartPort:%d\n", *(_portsArray));
     printf("           LastPort :%d\n", *(_portsArray + _portCount - 1));
-    printf("           MaxThread:%d\n", _maxThreads);
+    if (!isSynScan) {
+        printf("           MaxThread:%d\n", _maxThreads);
+    }
     printf("------------------------scaning-------------------------\n");
 }
 
@@ -380,7 +382,7 @@ void tcpScan() {
         freemem();
         exit(-1);
     }
-    printf("Pool started with %d threads and queue size of %d\n", _maxThreads, thpool->count);
+    printf("Pool started with %d threads and queue size of %d\n", _maxThreads, 65535);
     while (currentIp <= _endIp) { //网络字节序列比较
         portIndex = 0;
         while (portIndex < _portCount) {
@@ -460,7 +462,7 @@ int main(int argc, char **argv) {
         for (int i = 1; i <= 3; i++) {
             if (!strcasecmp(argv[argc - i], "/Save")) {
                 _isLog = true;
-                log_fd = open(_logFile, O_RDWR | O_TRUNC | O_CREAT, S_IRUSR | S_IWUSR);
+                log_fd = open(_logFile, O_RDWR | O_APPEND | O_CREAT, S_IRUSR | S_IWUSR);
                 if (log_fd == -1) {
                     printf("Can not create log file .\n");
                     exit(-1);
