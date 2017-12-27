@@ -63,14 +63,14 @@ void print_buffer(unsigned char *buffer, int len) {
     fflush(stdout);
 }
 
-void socket_timeoutset(int sockfd,int seconds,int socktype) {
+int socket_timeoutset(int sockfd,int seconds,int socktype) {
     struct timeval tv;
     tv.tv_sec = seconds;
     tv.tv_usec = 0;
     if (setsockopt(sockfd, SOL_SOCKET, socktype==1?SO_SNDTIMEO:SO_RCVTIMEO, (char *) &tv, sizeof(tv)) < 0) {
-        perror("setsockopt failed\n");
-        exit(-1);
+        return -1;
     }
+    return 0;
 }
 
 void uint32_to_ipstr(uint32_t ip, char *ip_ptr) { //使用网络字节序列
@@ -100,21 +100,27 @@ uint16_t checkSum(void *buffer, int size) {
 * 得到本地要绑定的 ip
 */
 uint32_t get_local_ip(char *dstIpAddr) {
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    int dns_port = 53;
-    int err;
+
     struct sockaddr_in serv;
     struct sockaddr_in local;
     socklen_t locallen = sizeof(local);
     memset(&serv, 0, sizeof(serv));
     memset(&local, 0, sizeof(local));
+
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     serv.sin_family = AF_INET;
     serv.sin_addr.s_addr = inet_addr(dstIpAddr);//inet_addr(HostName);
-    serv.sin_port = htons(dns_port);
-    err = connect(sock, (const struct sockaddr *) &serv, sizeof(serv));
-    err = getsockname(sock, (struct sockaddr *) &local, &locallen);
-    if (-1 == err) { //failed
-        exit(EXIT_FAILURE);
+    serv.sin_port = htons(9); //9 is discard port
+
+    if(connect(sock, (const struct sockaddr *) &serv, sizeof(serv))==-1){
+        close(sock);
+        perror("connect:");
+        return 0;
+    }
+    if(getsockname(sock, (struct sockaddr *) &local, &locallen)){
+        perror("getsockname:");
+        close(sock);
+        return 0;
     }
     close(sock);
     return local.sin_addr.s_addr;

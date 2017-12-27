@@ -119,7 +119,7 @@ int valid_ip_addr(char *ipAddress);
 void help(char * app);
 void print_buffer(unsigned char *buffer, int len);
 void uint32_to_ipstr(uint32_t ip,char *ip_ptr);
-void socket_timeoutset(int sockfd,int seconds,int socktype);
+int socket_timeoutset(int sockfd,int seconds,int socktype);
 //通用函数
 uint16_t checkSum(void * buffer, int size);
 uint32_t get_local_ip (char * dstIpAddr);
