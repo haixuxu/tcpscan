@@ -42,6 +42,7 @@ PortRange *portrange;
 int log_fd;  // for log
 unsigned long _scantasks = 0;
 unsigned long _donetasks = 0;
+uint8_t portlist[0xFFFF] = {0}; //要扫描了的端口相应的位会被置1
 
 //SYN option
 
@@ -196,11 +197,16 @@ void process_packet(unsigned char *buffer, int size) {
 //    printf("%02X ", iph->tos); //1字节
 //    printf("%04X ", iph->total_len); //2字节 读取颠倒....
     char remote_ipstr[100] = {0};
-    int packet_faddr = ntohl(iph->sourceIP);
+    int packet_faddr = htonl(iph->sourceIP);
 
-    if (packet_faddr < _startIp || packet_faddr > _endIp) { //不是要扫描的IP
+    if (htonl(iph->destIP)!=_bindIp||packet_faddr < _startIp || packet_faddr > _endIp) { //不是要扫描的IP
         return;
     }
+    int remote_port = htons(tcph->th_sport);
+    if(*(portlist + remote_port-1)){  //filter  receive repeat ACK packet
+        return;
+    }
+    *(portlist + remote_port-1) = 1;
     //完成任务计数
     pthread_mutex_lock(&lock);
     _donetasks++;
@@ -212,7 +218,7 @@ void process_packet(unsigned char *buffer, int size) {
     //-------| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 //    uint syn = tcph->th_flag & 0x02;
 //    uint ack = tcph->th_flag & 0x10; 6012
-    if (*(buffer + 33) == 0x12) { //00010010 收到确认ACK+SYN包,表明可用,收到ACK+RST包表明不可用
+    if (tcph->th_flag & 0x10&&tcph->th_flag & 0x02) { //00010010 收到确认ACK+SYN包,表明可用,收到ACK+RST包表明不可用
 //        print_buffer(buffer, size);
         spwritelog("%-16s %-5d  Open             \n", remote_ipstr, htons(tcph->th_sport));
     }
@@ -275,7 +281,6 @@ void synScan() {
         portIndex = 0;
         while (portIndex < _portCount) {
 
-            static uint32_t seed = 0x2b;
             int port = *(_portsArray + portIndex);
             int len = 0;
             struct sockaddr_in addr;
@@ -283,12 +288,15 @@ void synScan() {
             addr.sin_family = AF_INET;
             addr.sin_addr.s_addr = ntohl(currentIp);
             addr.sin_port = htons(port);
-            srandom(seed++);
+
             len = buildSynPacket(buf, ntohl(_bindIp), htons(getrandom(0xC000, 0xFFFF)), ntohl(currentIp), addr.sin_port);
 //            printf("sendto %s:%d --------\n", inet_ntoa(addr.sin_addr), port);
             if (sendto(sockfd, buf, len, 0, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
                 printf("Error sending syn packet. Error number : %d . Error message : %s \n", errno, strerror(errno));
+                //完成任务计数
+                pthread_mutex_lock(&lock);
                 _donetasks++;
+                pthread_mutex_unlock(&lock);
             }
             portIndex++;
         }
