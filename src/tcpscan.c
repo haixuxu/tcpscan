@@ -42,7 +42,6 @@ PortRange *portrange;
 int log_fd;  // for log
 unsigned long _scantasks = 0;
 unsigned long _donetasks = 0;
-uint8_t portlist[0xFFFF] = {0}; //要扫描了的端口相应的位会被置1
 
 //SYN option
 
@@ -202,11 +201,6 @@ void process_packet(unsigned char *buffer, int size) {
     if (htonl(iph->destIP)!=_bindIp||packet_faddr < _startIp || packet_faddr > _endIp) { //不是要扫描的IP
         return;
     }
-    int remote_port = htons(tcph->th_sport);
-    if(*(portlist + remote_port-1)){  //filter  receive repeat ACK packet
-        return;
-    }
-    *(portlist + remote_port-1) = 1;
     //完成任务计数
     pthread_mutex_lock(&lock);
     _donetasks++;
