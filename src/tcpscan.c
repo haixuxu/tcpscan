@@ -452,7 +452,6 @@ void startScan(char *scanType, char *startIpAddr, char *endIpAddr, char *portStr
 
         _bindIp = htonl(_bindIp);
         uint32_to_ipstr(_bindIp, bindip);
-        printScanOption();
         synScan();
     } else { //tcp  使用多线程
         if (!_maxThreads || _maxThreads > 0x400) {
