@@ -12,6 +12,7 @@
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <pthread.h>
+#include <signal.h>
 #include "tcpscan.h"
 
 typedef struct LpParamsTag {
@@ -21,6 +22,7 @@ typedef struct LpParamsTag {
 
 //option
 bool isSynScan = false;
+bool isSingleScan=false;
 bool _isLog = false;
 bool _isBanner = false;
 bool _isHttp = false;
@@ -42,6 +44,7 @@ PortRange *portrange;
 int log_fd;  // for log
 unsigned long _scantasks = 0;
 unsigned long _donetasks = 0;
+uint8_t portlist[0xFFFF] = {0}; //要扫描了的端口相应的位会被置1
 
 //SYN option
 
@@ -84,7 +87,11 @@ void freememExit(int status) {
     }
     exit(status);
 }
-
+void sig_handler(int sig){
+    if(sig==SIGINT){
+        freememExit(0);
+    }
+}
 void printScanOption() {
     printf("_bindIp  mem>>%X\n", _bindIp);
     printf("_startIp mem>>%X\n", _startIp);
@@ -111,9 +118,9 @@ void filterScanPort(PortRange *portrange) {
 
     uint8_t *port_list = portrange->g_portlist;
     int i, offset = 0;
-    for (i = 1; i < 0xFFFF; i++) {
+    for (i = 0; i < 0xFFFF; i++) {
         if (*(port_list + i) == 1) {
-            *(_portsArray + offset) = i;
+            *(_portsArray + offset) = i+1;
             offset++;
         }
     }
@@ -200,6 +207,13 @@ void process_packet(unsigned char *buffer, int size) {
 
     if (htonl(iph->destIP)!=_bindIp||packet_faddr < _startIp || packet_faddr > _endIp) { //不是要扫描的IP
         return;
+    }
+    if(isSingleScan){
+        int remote_port = htons(tcph->th_sport);
+        if(*(portlist + remote_port-1)){  //filter  receive repeat ACK packet
+            return;
+        }
+        *(portlist + remote_port-1) = 1;
     }
     //完成任务计数
     pthread_mutex_lock(&lock);
@@ -386,6 +400,7 @@ void tcpScan() {
         freememExit(-1);
     }
     printf("Pool started with %d threads and queue size of %d\n", _maxThreads, 65535);
+    printf("total scan tasks:%d\n", _scantasks);
     while (currentIp <= _endIp) { //网络字节序列比较
         portIndex = 0;
         while (portIndex < _portCount) {
@@ -403,7 +418,7 @@ void tcpScan() {
         }
         ++currentIp;
     }
-    printf("total scan tasks:%d\n", _scantasks);
+
     while (1) {
         usleep(15 * 1000);
         if (_scantasks == _donetasks) {
@@ -442,6 +457,10 @@ void startScan(char *scanType, char *startIpAddr, char *endIpAddr, char *portStr
     uint32_to_ipstr(_startIp, startip);
     uint32_to_ipstr(_endIp, endip);
 
+    if(_startIp==_endIp){
+        isSingleScan = true;
+    }
+    signal(SIGINT, sig_handler);
     if (isSynScan) { //syn
         _maxThreads = 1; //单线程
         _bindIp = get_local_ip(startip); //获取本地绑定IP

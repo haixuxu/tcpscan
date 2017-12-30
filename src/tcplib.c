@@ -159,12 +159,12 @@ void parse_port_str(char *poststr, PortRange *port_range) {
                 continue;
             }
             for (idx = start; idx <= end; idx++) {
-                g_port_list[idx] = 1;
+                g_port_list[idx-1] = 1;
                 count++;
             }
         } else {
             start = atoi(temp);
-            g_port_list[start] = 1;
+            g_port_list[start-1] = 1;
             count++;
         }
         temp = strtok(NULL, ",");
