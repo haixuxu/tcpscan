@@ -1,3 +1,7 @@
 .idea
 test
 cmake-build-debug
+.vscode
+*.o
+src/targets.txt
+src/tcpscan

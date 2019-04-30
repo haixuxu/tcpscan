@@ -420,7 +420,7 @@ void tcpScan() {
     }
 
     while (1) {
-        usleep(15 * 1000);
+        usleep(2 * 1000);
         if (_scantasks == _donetasks) {
             threadpool_destroy(thpool, 0);
             break;
